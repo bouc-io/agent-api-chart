@@ -1,0 +1,16 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} has been deployed.
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Chart:     {{ .Chart.Name }}-{{ .Chart.Version }}
+
+In the bouc.io cluster this chart is reconciled by FluxCD, and its values are
+supplied from generated ConfigMaps via `valuesFrom` — not the bundled
+*.values.yaml files directly. See the chart README for the value reference.
+
+Verify the rollout:
+  kubectl -n {{ .Release.Namespace }} get pods
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ .Chart.Name }}
+
+Tail logs:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} -f

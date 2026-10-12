@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent-api-chart.fullname" . }}
+  labels:
+    {{- include "agent-api-chart.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      #targetPort: http
+      targetPort: {{ .Values.environment.PORT }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "agent-api-chart.selectorLabels" . | nindent 4 }}
