@@ -1,0 +1,201 @@
+# Base values for agent-api-chart
+# These values should never change between environments or over time
+
+replicaCount: 1
+
+image:
+  registry: ghcr.io/bouc-io
+  repository: application/agent/agent-api-server
+  tag: "1.0.2255735448" # This should be replaced by a real tag in production/deployment
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# Applied to the Deployment object (not the pod template). Reloader watches the
+# Secrets and ConfigMaps this workload references and triggers a rolling restart
+# when one changes, which is what makes DB password rotation take effect: a
+# secretKeyRef env var is resolved at pod start and never refreshed.
+# Inert if stakater/Reloader is not installed in the cluster.
+deploymentAnnotations:
+  reloader.stakater.com/auto: "true"
+
+podAnnotations:
+  # Scraped by Prometheus for app-level metrics at /metrics (run counts/duration,
+  # LLM tokens, tool outcomes). Port must match the container listen port.
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/metrics"
+  prometheus.io/port: "3000"
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+volumes: []
+volumeMounts: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Kubernetes Health Probes (Phase 10)
+# Startup probe - allows time for DB migrations and initialization
+startupProbe:
+  httpGet:
+    path: /health/live
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 30  # 30 * 5s = 150s max startup time
+
+# Liveness probe - restart if unhealthy
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Readiness probe - remove from traffic if not ready
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+# Default environment variables (can be overridden per environment)
+environment:
+  PORT: 3000
+  ADMIN_API_URL: ""
+  PORTAL_API_URL: ""
+  # OpenTelemetry: the deployment template defaults OTEL_EXPORTER_OTLP_ENDPOINT to the node-local
+  # collector Service; set it here only to override. service.name surfaces in Jaeger/Grafana.
+  OTEL_SERVICE_NAME: "agent-api-server"
+  # Overridden from the cluster-vars ConfigMap via the HelmRelease (Flux postBuild).
+  ENVIRONMENT_ID: "unknown"
+  # Agent execution harness tuning (mirrors .env.example defaults)
+  MAX_EXECUTION_STEPS: 10
+  EXECUTOR_TIMEOUT_MS: 300000
+  LLM_BREAKER_THRESHOLD: 5
+  LLM_BREAKER_COOLDOWN_MS: 30000
+  OLLAMA_KEEP_ALIVE: "10m"
+  SSE_HEARTBEAT_MS: 15000
+  # Chat surface (/v1/chats, formerly chatbot-api-server). MAX_HISTORY_MESSAGES is 20 to
+  # match what that service shipped with; the code default is 10.
+  MAX_HISTORY_MESSAGES: 20
+  MEMORY_SEARCH_LIMIT: 10
+  OLLAMA_THINK: "true"
+  # Chat distillation is throttled rather than fired every turn: a chat turn is one
+  # message, so both a new-message count and a wall-clock interval must be met.
+  DISTILLATION_MIN_MESSAGES: 10
+  DISTILLATION_MIN_INTERVAL_MS: 900000
+  DISTILLATION_MAX_MESSAGES: 50
+  # Eval harness HITL auto-approval master switch. Disabled by default; set "true" only
+  # on eval clusters so headless runs (options.eval_mode=true) skip the human gate.
+  EVAL_AUTO_APPROVE: "false"
+  # Sandboxed code execution (code_execute). Disabled by default; needs a container runtime.
+  ALLOW_CODE_EXECUTE: "false"
+  SANDBOX_IMAGE: "python:3.11-slim"
+  SANDBOX_TIMEOUT_MS: "10000"
+  SANDBOX_MEMORY: "256m"
+  SANDBOX_CPUS: "1"
+  SANDBOX_PIDS: "128"
+
+# Ensure bundled PostgreSQL subchart pulls from the Bitnami legacy registry or appropriate source
+postgresql:
+  global:
+    ## Security parameters
+    ##
+    security:
+      allowInsecureImages: true
+  image:
+    registry: docker.io
+    repository: pgvector/pgvector
+    tag: 0.8.1-pg18-trixie
+  primary:
+    extraVolumes:
+      - name: postgresql-socket
+        emptyDir: {}
+    extraVolumeMounts:
+      - name: postgresql-socket
+        mountPath: /var/run/postgresql
+    networkPolicy:
+      # Istio's injector adds prometheus.io scrape annotations for the sidecar's merged-metrics
+      # port (15020). The Bitnami policy only allows 5432, so Prometheus scrapes time out (up=0).
+      extraIngress:
+        - ports:
+            - port: 15020
+              protocol: TCP
+          from:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: prometheus
+
+# Redis configuration (for BullMQ job queues)
+redis:
+  enabled: false # Disabled by default in base, enable in environment-specific values
+  global:
+    ## Security parameters
+    ##
+    security:
+      allowInsecureImages: true
+  architecture: standalone
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.4.3-debian-12-r0
+  auth:
+    enabled: true
+    # Password comes from External Secrets. The same Secret also carries REDIS_URL,
+    # which the app reads via secretKeyRef, so no password lands in a ConfigMap.
+    # Must be set in environment-specific values.
+    existingSecret: ""
+    existingSecretPasswordKey: redis-password
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+  networkPolicy:
+    # Same as postgresql above: let Prometheus reach the Istio sidecar's merged-metrics port.
+    # The Bitnami policy only allows 6379.
+    extraIngress:
+      - ports:
+          - port: 15020
+            protocol: TCP
+        from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: prometheus

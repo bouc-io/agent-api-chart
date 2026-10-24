@@ -1,0 +1,126 @@
+# Local environment values for agent-api-chart
+# Only include values that differ from base or are required for local
+
+# replicaCount left as 1 (default)
+
+image:
+  registry: ghcr.io/bouc-io
+  repository: application/agent/agent-api-server
+  tag: "1.0.2255735448" # This should be replaced by a real tag in production/deployment
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: agent-chart.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+postgresql:
+  enabled: true
+  global:
+    ## Security parameters
+    ##
+    security:
+      allowInsecureImages: true
+  # Ensure bundled PostgreSQL subchart pulls from the Bitnami legacy registry
+  image:
+    registry: docker.io
+    repository: pgvector/pgvector
+    tag: 0.8.1-pg18-trixie
+  auth:
+    username: ps_agent
+    database: ps_agent_db
+    # Both the bundled Postgres and the app read from this ESO-managed Secret:
+    # Postgres takes the `password` key, the app takes the `DATABASE_URL` key that
+    # the ExternalSecret template assembles. Keep username and database in sync
+    # with the DSN in infrastructure/external-secrets/externalsecrets/local/.
+    existingSecret: boucio-agent-db-secret
+    secretKeys:
+      adminPasswordKey: password
+      userPasswordKey: password
+  architecture: standalone
+
+environment:
+  # Environment identity for telemetry labels. ${ENVIRONMENT_ID} is substituted from the
+  # manually-created cluster-vars ConfigMap by Flux postBuild (local-config Kustomization).
+  ENVIRONMENT_ID: "${ENVIRONMENT_ID}"
+  NODE_ENV: "development"
+  PORT: 3000
+  CORS_ORIGIN: "*"
+  # LLM Configuration
+  OLLAMA_URL: "http://ollama-chart.default.svc.cluster.local:11434"
+  OLLAMA_MODEL: "qwen3.5:2b"
+  # OAuth2 Configuration (for token refresh)
+  OAUTH_TOKEN_ENDPOINT: "https://sso.${CLUSTER_DOMAIN}/realms/users/protocol/openid-connect/token"
+  OAUTH_CLIENT_ID: "oauth2-proxy"
+  # SSL/TLS Configuration
+  ALLOW_SELF_SIGNED_CERTS: "true"
+  # Logging Configuration
+  LOG_LEVEL: "debug"
+  # Tool Execution Configuration
+  TOOL_DEFAULT_TIMEOUT_MS: "30000"
+  # Memory Service Configuration
+  MEMORY_SERVICE_URL: "http://memory-api-chart.default.svc.cluster.local:80"
+  MEMORY_SERVICE_ENABLED: "true"
+  # Distillation Service Configuration
+  DISTILLATION_SERVICE_URL: "http://memory-distiller-chart.default.svc.cluster.local:80"
+  DISTILLATION_ENABLED: "true"
+  # Instruction services (GAP 4)
+  ADMIN_API_URL: "http://admin-api-chart.default.svc.cluster.local:80"
+  PORTAL_API_URL: "http://portal-api-chart.default.svc.cluster.local:80"
+
+externalDatabase:
+  host: ""
+  port: 5432
+  user: bn_agent
+  database: bitnami_agent
+  password: ""
+  existingSecret: ""
+  existingSecretHostKey: ""
+  existingSecretPortKey: ""
+  existingSecretUserKey: ""
+  existingSecretDatabaseKey: ""
+  existingSecretPasswordKey: ""
+  annotations: {}
+
+# Redis for BullMQ job queues (local development)
+redis:
+  enabled: true
+  global:
+    ## Security parameters
+    ##
+    security:
+      allowInsecureImages: true
+  architecture: standalone
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.4.3-debian-12-r0
+  auth:
+    enabled: true
+    # Password comes from External Secrets. The same Secret also carries REDIS_URL,
+    # which the app reads via secretKeyRef, so no password lands in a ConfigMap.
+    existingSecret: boucio-agent-redis-secret
+    existingSecretPasswordKey: redis-password
+  master:
+    persistence:
+      #enabled: false  # No persistence for local dev
+      enabled: true
+      size: 1Gi
